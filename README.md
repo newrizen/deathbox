@@ -1,6 +1,6 @@
 <div align="center">
   <img 
-    src="https://raw.githubusercontent.com/newrizen/boxhead/main/iamges/DeathBox.png"
+    src="https://raw.githubusercontent.com/newrizen/boxhead/main/images/DeathBox.png"
     alt="New Horizon Header"
     width="350">
 
@@ -14,7 +14,7 @@
   DeathBox, a Minetest Game (Luanti) mod based in Boxhead 2Play
 
   <img 
-    src="https://raw.githubusercontent.com/newrizen/boxhead/main/iamges/DeathBox.png"
+    src="https://raw.githubusercontent.com/newrizen/boxhead/main/images/screenshot_20260626_171625.png"
     alt="New Horizon Header"
     width="350">
 </div>
