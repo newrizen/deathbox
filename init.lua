@@ -1022,7 +1022,7 @@ core.register_entity("deathbox:flame_ball", {
         visual = "sprite",
         visual_size = {x = 0.5, y = 0.5},
         textures = {"db_flame.png"},
-        glow = 6,
+        glow = 8,
         pointable = false,
     },
     _owner = nil,
@@ -1122,6 +1122,119 @@ core.register_entity("deathbox:flame_ball", {
     end
 end,
 })
+
+-- ENTIDADE: Projétil de fogo
+core.register_entity("deathbox:flame_ball2", {
+    initial_properties = {
+        hp_max = 1,
+        physical = true,
+        static_save = false,
+        collide_with_objects = false,
+        collisionbox = {0.01, -0.15, -0.01, 0.01, 0.15, 0.01},
+        visual = "sprite",
+        visual_size = {x = 0.7, y = 0.7},
+        textures = {"db_flame2.png"},
+        glow = 14,
+        pointable = false,
+    },
+    _owner = nil,
+    _life = 0.8,
+    on_step = function(self, dtime, moveresult)
+        self._life = self._life - dtime
+        if self._life <= 0 then self.object:remove() return end
+        local pos = self.object:get_pos()
+        if not pos then return end
+        local vel = self.object:get_velocity()
+        local function check_hit(p)
+            local cp = vector.round(p)
+            local cn = core.get_node(cp)
+            if not cn then return false end
+            if cn.name:find("deathbox:barrier") then
+                deathbox.hit_barrier(cp)
+                self.object:remove()
+                return true
+            elseif cn.name == "deathbox:barrel" then
+                deathbox.explode_barrel(cp)
+                self.object:remove()
+                return true
+            elseif cn.name == "deathbox:weapon_box" then
+                core.set_node(cp, {name = "air"})
+                deathbox.schedule_weapon_box_respawn(cp)
+                self.object:remove()
+                return true
+            elseif cn.name ~= "air" and cn.name ~= "ignore" and cn.name ~= "deathbox:floor" and cn.name ~= "deathbox:bloodpool" then
+                self.object:remove()
+                return true
+            end
+            return false
+        end
+        if moveresult and moveresult.collides then
+            local offsets = {
+                {x=0,y=0,z=0},{x=0,y=-1,z=0},{x=0,y=1,z=0},
+                {x=1,y=0,z=0},{x=-1,y=0,z=0},
+                {x=0,y=0,z=1},{x=0,y=0,z=-1},
+                {x=1,y=-1,z=0},{x=-1,y=-1,z=0},
+                {x=0,y=-1,z=1},{x=0,y=-1,z=-1},
+            }
+            for _, off in ipairs(offsets) do if check_hit(vector.add(pos, off)) then return end end
+            self.object:remove()
+            return
+        end
+        for _, obj in ipairs(core.get_objects_inside_radius(pos, 1.5)) do
+            if obj ~= self.object and obj:is_player() then
+                local player_pos = obj:get_pos()
+                if player_pos then
+                    local dx = pos.x - player_pos.x
+                    local dz = pos.z - player_pos.z
+                    local horiz_dist = math.sqrt(dx*dx + dz*dz)
+                    local dy = pos.y - (player_pos.y + 0.85)
+                    if horiz_dist < 0.35 and math.abs(dy) < 0.85 then
+                        obj:punch(self.object, 1.0, {full_punch_interval = 0.1, damage_groups = {fleshy = deathbox.config.flame_damage}}, vel)
+                        self.object:remove()
+                        return
+                    end
+                end
+            elseif obj ~= self.object and not obj:is_player() then
+                local ent = obj:get_luaentity()
+                if ent and (ent.name == "deathbox:zombie" or ent.name == "deathbox:goblin" or ent.name == "deathbox:imp" or ent.name == "deathbox:demon" or ent.name == "deathbox:demonking") then
+                    local mob_pos = obj:get_pos()
+                    local mob_pos = obj:get_pos()
+                    if mob_pos then
+                        local dx = pos.x - mob_pos.x
+                        local dz = pos.z - mob_pos.z
+                        local horiz_dist = math.sqrt(dx*dx + dz*dz)
+                        local dy = pos.y - (mob_pos.y + 0.85)
+                        if horiz_dist < 0.35 and math.abs(dy) < 0.85 then
+                            local owner_obj = self._owner and core.get_player_by_name(self._owner)
+                            if owner_obj then
+                                obj:punch(owner_obj, 1.0, {full_punch_interval = 0.1, damage_groups = {fleshy = deathbox.config.flame_damage}}, vel)
+                                local mob_pos = obj:get_pos()
+                                if mob_pos then
+                                   local knock = vector.normalize(vel)
+                                   obj:add_velocity({
+                                       x = knock.x * 25,
+                                       y = 2,
+                                       z = knock.z * 25
+                                   })
+                                end
+                                self.object:remove()
+                                return
+                            else obj:set_hp(math.max(0, obj:get_hp() - deathbox.config.flame_damage))
+                            end
+                            self.object:remove()
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    local rounded = vector.round(pos) -- 475
+    for _, check in ipairs({rounded, {x=rounded.x, y=rounded.y-1, z=rounded.z}}) do
+        if check_hit(check) then return end
+    end
+end,
+})
+
 
 core.register_entity("deathbox:bullet_shot", {
     initial_properties = {
@@ -1317,6 +1430,7 @@ core.register_entity("deathbox:goblin", {
         visual_size = {x = 0.7, y = 0.7},
         stepheight = 0.6,
         makes_footstep_sound = true,
+        glow = 1,
     },
     _attack_timer = 0,
     on_activate = function(self, staticdata, dtime_s)
@@ -1436,11 +1550,12 @@ core.register_entity("deathbox:imp", {
         collide_with_objects = true,
         collisionbox = {-0.15, 0.0, -0.15, 0.15, 1.7, 0.15},
         visual = "mesh",
-        mesh = "character.b3d",
-        textures = {"character.png^[multiply:#2d0202:100"},
+        mesh = "db_demonking.glb",
+        textures = {"db_imp.png^[multiply:#ed1c24:50"},
         visual_size = {x = 0.7, y = 0.7},
         stepheight = 0.6,
         makes_footstep_sound = true,
+        glow = 1,
     },
     _attack_timer = 0,
     _box_search_timer = 0,
@@ -1451,7 +1566,7 @@ core.register_entity("deathbox:imp", {
         self.object:set_acceleration({x = 0, y = -10, z = 0})
         self.object:set_hp(deathbox.config.zombie_hp)
         self._last_hp = deathbox.config.zombie_hp
-        self.object:set_animation({x = 168, y = 187}, 30, 0, true)
+        self.object:set_animation({x = 168 / 30, y = 187 / 30}, 1, 0, true)
         self._attack_timer = 0
         self._box_search_timer = 0
         self._target_box_pos = nil
@@ -1553,11 +1668,12 @@ core.register_entity("deathbox:demon", {
         collide_with_objects = true,
         collisionbox = {-0.25, 0.0, -0.25, 0.25, 1.7, 0.25},
         visual = "mesh",
-        mesh = "character.b3d",
-        textures = {"character.png^[multiply:#222222:150^[colorize:#ed1c24:100"},
+        mesh = "db_demonking.glb",
+        textures = {"db_demon.png^[multiply:#ed1c24:100"},
         visual_size = {x = 1, y = 1.25},
         stepheight = 0.6,
         makes_footstep_sound = true,
+        glow = 4,
     },
     _attack_timer = 0,
     _melee_timer = 0,
@@ -1571,7 +1687,7 @@ core.register_entity("deathbox:demon", {
         self.object:set_acceleration({x = 0, y = -10, z = 0})
         self.object:set_hp(deathbox.config.demon_hp)
         self._last_hp = deathbox.config.demon_hp
-        self.object:set_animation({x = 168, y = 187}, 30, 0, true)
+        self.object:set_animation({x = 168 / 30, y = 187 / 30}, 1, 0, true)
         self._attack_timer = 0
         self._melee_timer = 0
         self._burst_count = 0
@@ -1680,6 +1796,7 @@ core.register_entity("deathbox:demonking", {
         visual_size = {x = 1.25, y = 1.5},
         stepheight = 0.6,
         makes_footstep_sound = true,
+        glow = 10,
     },
     _attack_timer = 0,
     _melee_timer = 0,
@@ -1781,7 +1898,7 @@ core.register_entity("deathbox:demonking", {
                         }
                         for _, d in ipairs(dirs) do
                             local shot_dir = vector.normalize(d)
-                            local proj = core.add_entity(vector.add(tpos, vector.multiply(shot_dir, 0.8)), "deathbox:flame_ball")
+                            local proj = core.add_entity(vector.add(tpos, vector.multiply(shot_dir, 0.8)), "deathbox:flame_ball2")
                             if proj then
                                 proj:set_velocity(vector.multiply(shot_dir, deathbox.config.flame_speed))
                                 local ent = proj:get_luaentity()
@@ -2351,7 +2468,7 @@ function deathbox.spawn_wave()
     local goblin_count = math.floor(wave/2)
     local imp_count = math.floor(wave/4)
     local demon_count  = math.floor(wave/5)
-    local demonking_count  = math.floor(wave/2)
+    local demonking_count  = math.floor(wave/11)
     local total = zombie_count + goblin_count + imp_count + demon_count + demonking_count
     deathbox.state.alive_zombies = total
     local msg = "[deathbox] Onda " .. wave .. " — " .. zombie_count .. " zumbis"
