@@ -313,7 +313,7 @@ function deathbox.weapon_box_landing_kill(pos)
             end
         end
     end
-    core.sound_play("tnt_explode", {pos = pos, gain = 0.6, max_hear_distance = 16}, true)
+    core.sound_play("default_place_node_hard", {pos = pos, gain = 0.6, max_hear_distance = 16}, true)
     core.add_particlespawner({
         amount = 20, time = 0.1,
         minpos = vector.subtract(pos, {x=0.5,y=0,z=0.5}),
@@ -321,7 +321,7 @@ function deathbox.weapon_box_landing_kill(pos)
         minvel = {x=-3,y=1,z=-3}, maxvel = {x=3,y=5,z=3},
         minexptime = 0.3, maxexptime = 0.7,
         minsize = 1, maxsize = 3,
-        texture = "db_box.png",
+        texture = "db_dust.png",
     })
 end
 -- ENTIDADE: Caixa de arma cadenciada — controla a própria queda,
@@ -384,7 +384,7 @@ on_punch = function(pos, node, puncher)
     if not puncher or not puncher:is_player() then return end
     local box_pos = {x = pos.x, y = pos.y, z = pos.z}
     core.set_node(pos, {name = "air"})
-    core.sound_play("default_chest_open", {pos = pos, gain = 0.6, max_hear_distance = 10}, true)
+    core.sound_play("default_chest_close", {pos = pos, gain = 0.6, max_hear_distance = 10}, true)
     -- Onda 1 (ou qualquer onda sem tabela definida): sempre pistola.
     -- Ondas 2+: sorteia conforme deathbox.weapon_drop_tables.
     local item_name = "deathbox:pistol"
@@ -409,7 +409,6 @@ on_punch = function(pos, node, puncher)
         end
     else core.chat_send_player(puncher:get_player_name(), core.colorize("#aaaaaa", "A caixa estava vazia!")) -- Caiu na fração não coberta pelos pesos: caixa vazia.
     end
-
     core.add_particlespawner({
         amount = 8, time = 0.2,
         minpos = vector.subtract(pos, {x=0.3,y=0.3,z=0.3}),
@@ -417,7 +416,7 @@ on_punch = function(pos, node, puncher)
         minvel = {x=-1,y=1,z=-1}, maxvel = {x=1,y=3,z=1},
         minexptime = 0.3, maxexptime = 0.6,
         minsize = 1, maxsize = 2,
-        texture = "db_box.png",
+        texture = "db_dust.png",
     })
     deathbox.schedule_weapon_box_respawn(box_pos)
 end,
@@ -498,7 +497,7 @@ function deathbox.hit_barrier(pos)
             minvel = {x=-2,y=1,z=-2}, maxvel = {x=2,y=4,z=2},
             minexptime = 0.3, maxexptime = 0.8,
             minsize = 2, maxsize = 4,
-            texture = "db_barrier_4.png",
+            texture = "db_dust.png",
         })
         deathbox.barrier_columns[key] = nil
         return
@@ -615,6 +614,42 @@ core.register_craftitem("deathbox:medkit", {
     end,
 })
 
+-- =========================================================
+-- SONS CONTÍNUOS (LOOP) DE ARMAS AUTOMÁTICAS
+-- A UZI e o lança-chamas tocam um som em loop enquanto o jogador
+-- mantém o clique direito pressionado e ainda há balas/combustível.
+-- Guardamos o handle do som por jogador/arma para poder pará-lo
+-- exatamente quando o gatilho é solto, a munição acaba, a arma é
+-- trocada, o jogador morre ou desconecta.
+-- =========================================================
+deathbox.loop_sound_handles = {} -- [player_name] = {uzi = handle, flamethrower = handle}
+
+function deathbox.start_loop_sound(player, key, soundname, params)
+    if not player or not player:is_player() then return end
+    local pname = player:get_player_name()
+    local handles = deathbox.loop_sound_handles[pname]
+    if not handles then
+        handles = {}
+        deathbox.loop_sound_handles[pname] = handles
+    end
+    if handles[key] then return end -- já está tocando, não reinicia
+    handles[key] = core.sound_play(soundname, params, false)
+end
+
+function deathbox.stop_loop_sound(player_name, key)
+    local handles = deathbox.loop_sound_handles[player_name]
+    if not handles or not handles[key] then return end
+    core.sound_stop(handles[key])
+    handles[key] = nil
+end
+
+function deathbox.stop_all_loop_sounds(player_name)
+    local handles = deathbox.loop_sound_handles[player_name]
+    if not handles then return end
+    for _, handle in pairs(handles) do core.sound_stop(handle) end
+    deathbox.loop_sound_handles[player_name] = nil
+end
+
 deathbox.config.pistol_max_shots = 18
 core.register_tool("deathbox:pistol", {
     description = "Pistola Lock 18\nTiros: 18\n(clique direito para disparar)",
@@ -629,9 +664,13 @@ function deathbox.fire_pistol(itemstack, user)
     local meta = itemstack:get_meta()
     local shots_fired = meta:get_int("shots_fired") + 1
     deathbox.bullet_weapon(user, deathbox.config.bullet_speed)
+    if user and user:is_player() then
+        core.sound_play("default_metal2", {pos = user:get_pos(), gain = 2, max_hear_distance = 14}, true) -- db_pistol_shot"
+    end
     if shots_fired >= deathbox.config.pistol_max_shots then
         if user and user:is_player() then
             core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Pistola sem munição!"))
+            core.sound_play("default_dig_metal", {pos = user:get_pos(), gain = 0.6, max_hear_distance = 14}, true)
         end
         return ItemStack("")
     end
@@ -654,9 +693,13 @@ function deathbox.fire_pistol2(itemstack, user)
     local meta = itemstack:get_meta()
     local shots_fired = meta:get_int("shots_fired") + 1
     deathbox.bullet_weapon(user, deathbox.config.bullet_speed)
+    if user and user:is_player() then
+        core.sound_play("default_metal2", {pos = user:get_pos(), gain = 2, max_hear_distance = 14}, true) -- db_pistol_shot"
+    end
     if shots_fired >= deathbox.config.pistol_max_shots then
         if user and user:is_player() then
             core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Pistola Estendida sem munição!"))
+            core.sound_play("default_dig_metal", {pos = user:get_pos(), gain = 0.6, max_hear_distance = 14}, true)
         end
         return ItemStack("")
     end
@@ -682,8 +725,13 @@ function deathbox.fire_uzi(itemstack, user)
     if shots_fired >= deathbox.config.uzi_max_shots then
         if user and user:is_player() then
             core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Metralhadora UZI sem munição!"))
+            deathbox.stop_loop_sound(user:get_player_name(), "uzi")
+            core.sound_play("fire_flint_and_steel", {pos = user:get_pos(), gain = 0.6, max_hear_distance = 16}, true)
         end
         return ItemStack("")
+    end
+    if user and user:is_player() then
+        deathbox.start_loop_sound(user, "uzi", "default_metal2_fast", {object = user, gain = 2, max_hear_distance = 16, loop = true})  -- db_uzi_loop"
     end
     meta:set_int("shots_fired", shots_fired)
     local remaining = deathbox.config.uzi_max_shots - shots_fired
@@ -726,7 +774,6 @@ function deathbox.bullet_weapon(user, speed)
         local ent = obj:get_luaentity()
         ent._owner = user:get_player_name()
     end
-    core.sound_play("default_punch", {pos = pos, gain = 0.4, max_hear_distance = 10}, true)
 end
 
 --Lança-chamas
@@ -763,7 +810,6 @@ function deathbox.fire_weapon(user, life)
             ent._life = life or 0.1
         end
     end
-    core.sound_play("default_punch", {pos = pos, gain = 0.4, max_hear_distance = 10}, true)
 end
 core.register_tool("deathbox:flamethrower", {
     description = "Lança-Chamas\n(100 tiros)",
@@ -783,9 +829,15 @@ function deathbox.fire_flamethrower(itemstack, user, life)
     local shots_fired = meta:get_int("shots_fired") + 1
     deathbox.fire_weapon(user, life)
     if shots_fired >= deathbox.config.flamethrower_max_shots then
-        if user and user:is_player() then core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Lança-chamas sem combustível!"))
+        if user and user:is_player() then
+            core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Lança-chamas sem combustível!"))
+            deathbox.stop_loop_sound(user:get_player_name(), "flamethrower")
+            core.sound_play("fire_flint_and_steel", {pos = user:get_pos(), gain = 0.6, max_hear_distance = 16}, true)
         end
         return ItemStack("")
+    end
+    if user and user:is_player() then
+        deathbox.start_loop_sound(user, "flamethrower", "default_furnace_active", {object = user, gain = 4, max_hear_distance = 16, loop = true}) -- db_flamethrower_loop"
     end
     meta:set_int("shots_fired", shots_fired)
     local remaining = deathbox.config.flamethrower_max_shots - shots_fired
@@ -799,12 +851,19 @@ core.register_globalstep(function(dtime)
     deathbox.flame_timer = 0
     for _, player in ipairs(core.get_connected_players()) do
         local wielded = player:get_wielded_item()
+        local pname = player:get_player_name()
         if wielded:get_name() == "deathbox:flamethrower" then
             local ctrl = player:get_player_control()
             if ctrl.RMB then
                 local new_stack = deathbox.fire_flamethrower(wielded, player, 0.2)
                 player:set_wielded_item(new_stack)
+            else
+                -- gatilho solto: para o som contínuo
+                deathbox.stop_loop_sound(pname, "flamethrower")
             end
+        else
+            -- não está com o lança-chamas na mão: garante que o som pare
+            deathbox.stop_loop_sound(pname, "flamethrower")
         end
     end
 end)
@@ -819,12 +878,19 @@ core.register_globalstep(function(dtime)
     deathbox.uzi_timer = 0
     for _, player in ipairs(core.get_connected_players()) do
         local wielded = player:get_wielded_item()
+        local pname = player:get_player_name()
         if wielded:get_name() == "deathbox:uzi" then
             local ctrl = player:get_player_control()
             if ctrl.RMB then
                 local new_stack = deathbox.fire_uzi(wielded, player)
                 player:set_wielded_item(new_stack)
+            else
+                -- gatilho solto: para o som contínuo
+                deathbox.stop_loop_sound(pname, "uzi")
             end
+        else
+            -- não está com a UZI na mão: garante que o som pare
+            deathbox.stop_loop_sound(pname, "uzi")
         end
     end
 end)
@@ -897,7 +963,10 @@ function deathbox.remove_held_weapon(player_name)
 end
 
 core.register_on_joinplayer(function(player) deathbox.update_held_weapon(player) end)
-core.register_on_leaveplayer(function(player) deathbox.remove_held_weapon(player:get_player_name()) end)
+core.register_on_leaveplayer(function(player)
+    deathbox.remove_held_weapon(player:get_player_name())
+    deathbox.stop_all_loop_sounds(player:get_player_name())
+end)
 
 -- Verifica periodicamente (não a cada passo, por performance) se o
 -- item na mão de cada jogador mudou, já que o engine não tem um
@@ -1530,7 +1599,7 @@ function deathbox.imp_destroy_box(pos)
         minvel = {x=-1,y=1,z=-1}, maxvel = {x=1,y=3,z=1},
         minexptime = 0.3, maxexptime = 0.6,
         minsize = 1, maxsize = 2,
-        texture = "db_box.png",
+        texture = "db_dust.png",
     })
     deathbox.schedule_weapon_box_respawn(pos)
 end
@@ -1942,6 +2011,7 @@ function deathbox.explode_barrel(pos)
     core.sound_play("tnt_explode", {pos = pos, gain = 1, max_hear_distance = 32}, true)
     core.add_particlespawner({
         amount = 50,
+        glow = 14,
         time = 0.05,
         minpos = vector.subtract(pos, {x = 0.3, y = 0.3, z = 0.3}),
         maxpos = vector.add(pos, {x = 0.3, y = 0.3, z = 0.3}),
@@ -1983,7 +2053,7 @@ function deathbox.explode_barrel(pos)
                             minvel = {x=-1,y=1,z=-1}, maxvel = {x=1,y=3,z=1},
                             minexptime = 0.3, maxexptime = 0.6,
                             minsize = 1, maxsize = 2,
-                            texture = "db_box.png",
+                            texture = "db_dust.png",
                         })
                         deathbox.schedule_weapon_box_respawn(p)
                     end
@@ -2475,7 +2545,7 @@ function deathbox.spawn_wave()
     if goblin_count > 0 then msg = msg .. ", " .. goblin_count .. " goblin(s)" .. (goblin_count > 1 and "s" or "") end
     if imp_count > 0 then msg = msg .. ", " .. imp_count .. " diabrete(s)" .. (imp_count > 1 and "s" or "") end
     if demon_count > 0 then msg = msg .. " e " .. demon_count .. " demônio(s)" .. (demon_count > 1 and "s" or "") end
-    if demonking_count > 0 then msg = msg .. " e " .. demonking_count .. " rei demônio" .. (demon_count > 1 and "s" or "") end
+    if demonking_count > 0 then msg = msg .. " e " .. demonking_count .. " rei demônio" .. (demonking_count > 1 and "s" or "") end
     msg = msg .. "!"
     core.chat_send_all(core.colorize("#ff5555", msg))
     deathbox.update_all_hud()
@@ -2646,6 +2716,33 @@ function deathbox.apply_match_camera(player)
     player:set_eye_offset({x = 0, y = 0, z = 0}, {x = 0, y = 0, z = -30})
     if player.set_camera then player:set_camera({mode = "third"}) end
 end
+
+-- Limita a rotação vertical da câmera durante a partida: o jogador só
+-- pode olhar entre 45° para baixo (pitch = pi/4, a metade do caminho
+-- até olhar reto para frente) e reto para baixo (pitch = pi/2). Ou
+-- seja, a visão nunca volta ao horizonte/frente — fica sempre
+-- inclinada para baixo, dentro dessa faixa de 45°.
+--
+-- A correção é sempre "depois do fato" (a câmera é controlada pelo
+-- cliente; o servidor só consegue reagir e corrigir de volta com um
+-- tick de atraso). Corrigir exatamente em cima do limite a cada tick
+-- faz o servidor "lutar" contra o mouse do jogador o tempo todo bem
+-- na linha do limite, o que aparece visualmente como tremor. Por
+-- isso só corrigimos quando o jogador já passou uma pequena margem
+-- de tolerância (TOLERANCE) do limite — pequena o bastante pra ser
+-- imperceptível, mas suficiente pra parar de corrigir a cada tick e
+-- eliminar o tremor.
+local PITCH_MIN = math.pi / 4 -- 45° para baixo: olhar mais "frente" que isso não é permitido
+local PITCH_MAX = math.pi / 2 -- 90° para baixo: reto para baixo
+core.register_globalstep(function(dtime)
+    if not deathbox.state.running then return end
+    for _, player in ipairs(core.get_connected_players()) do
+        local pitch = player:get_look_vertical()
+        if pitch <= PITCH_MIN then
+            player:set_look_vertical(PITCH_MIN)
+        end
+    end
+end)
 -- GAME OVER / LIMPEZA DE MOBS
 local function remove_all_deathbox_entities()
     for _, obj in ipairs(core.get_objects_inside_radius(deathbox.state.spawn_pos or {x=0,y=0,z=0}, 500)) do
@@ -2769,6 +2866,7 @@ core.register_chatcommand("dbstop", {
         end
         for _, player in ipairs(core.get_connected_players()) do
             if player.set_camera then player:set_camera({mode = "any"}) end
+            deathbox.stop_all_loop_sounds(player:get_player_name())
         end
         deathbox.update_all_hud()
         return true, "deathbox finalizado."
@@ -2821,6 +2919,9 @@ core.register_on_player_hpchange(function(player, hp_change, reason)
     end
     if player:get_hp() + hp_change > 0 then return hp_change end
     deathbox.state.running = false
+    for _, p in ipairs(core.get_connected_players()) do
+        deathbox.stop_all_loop_sounds(p:get_player_name())
+    end
     core.after(0, function()
         if not player or not player:is_player() then return end
         deathbox.state.last_wave = deathbox.state.wave
