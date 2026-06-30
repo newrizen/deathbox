@@ -18,11 +18,7 @@ deathbox.config = {
     base_pos = {x = 0, y = 300, z = 0},
     cell_size               = 1,    -- 1 char = 1 node
     wall_height             = 6,
-    -- quantos nodes a subestrutura (piso base + lava + novo piso) ocupa
-    -- abaixo do nível onde ficam objetos/jogador (base_pos.y). As
-    -- paredes partem do mesmo nível do piso base (base_pos.y - este
-    -- valor) e sobem wall_height nodes a partir daí.
-    understructure_depth    = 3,
+    understructure_depth    = 3, -- quantos nodes a subestrutura (piso base + lava + novo piso) ocupa
     zombies_initial         = 10,
     zombies_increase        = 2,
     zombie_hp               = 100,
@@ -524,6 +520,71 @@ function deathbox.apply_knockback(obj, attacker_pos, force)
         y = math.max(2, vel.y),
         z = dir.z * force,
     })
+end
+
+-- =========================================================
+-- SISTEMA DE MORTE ANIMADA DOS MOBS
+-- Interceptamos o dano via on_punch (return true = cancela o
+-- mecanismo padrão do engine). Quando o HP chega a 0,
+-- chamamos mob_start_death: paramos o mob, tocamos a animação
+-- de deitar (lay, frames 162-166 no esqueleto padrão do
+-- character.b3d; nos modelos .glb o mesmo trecho fica em
+-- 162/30 .. 166/30 segundos), e só depois removemos.
+-- damage_mob é o ponto único usado tanto pelo on_punch quanto
+-- pelos set_hp diretos dos projéteis (que agora passam por
+-- aqui em vez de chamar obj:set_hp diretamente).
+-- =========================================================
+
+-- Nomes de mobs que usam .glb (timeline em segundos ÷ 30)
+local GLB_MOBS = {
+    ["deathbox:zombie"]    = true,
+    ["deathbox:imp"]       = true,
+    ["deathbox:demon"]     = true,
+    ["deathbox:demonking"] = true,
+}
+
+-- Inicia a sequência de morte animada de um mob.
+function deathbox.mob_start_death(self)
+    if self._dying then return end
+    self._dying = true
+    local pos = self.object:get_pos()
+    -- Zera velocidade horizontal; mantém gravidade para o mob
+    -- pousar no chão. math.min(vy,0) descarta impulso pra cima
+    -- mas preserva queda se o mob já estava descendo.
+    local vy = self.object:get_velocity().y
+    self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+    self.object:set_acceleration({x = 0, y = -10, z = 0})
+    -- Torna invulnerável para não ser removido pelo engine enquanto
+    -- a animação toca (set_armor_groups({immortal=1}) desativa dano)
+    self.object:set_armor_groups({immortal = 1})
+    -- Animação de deitar (lay): frames 162-166 no esqueleto padrão.
+    -- Modelos .glb usam a mesma trilha mas em segundos (÷ 30).
+    if GLB_MOBS[self.name] then
+        self.object:set_animation({x = 162 / 30, y = 166 / 30}, 1, 0, false)
+    else
+        self.object:set_animation({x = 162, y = 166}, 30, 0, false)
+    end
+    -- Efeitos de morte
+    if pos then deathbox.spawn_bloodpool(pos)
+    end
+    -- Atualiza contador e verifica fim de onda
+    deathbox.state.alive_zombies = math.max(0, deathbox.state.alive_zombies - 1)
+    deathbox.check_wave_complete()
+    -- Remove o mob após a animação terminar (~1.5 s)
+    local obj_ref = self.object
+    core.after(1.5, function() if obj_ref and obj_ref:get_pos() then obj_ref:remove() end end)
+end
+
+-- Ponto único de dano para mobs. Substitui chamadas diretas a
+-- obj:set_hp() nos projéteis, garantindo que a animação de
+-- morte sempre seja tocada.
+function deathbox.damage_mob(obj, damage)
+    local ent = obj:get_luaentity()
+    if not ent or ent._dying then return end
+    local new_hp = obj:get_hp() - damage
+    if new_hp <= 0 then deathbox.mob_start_death(ent)
+    else obj:set_hp(new_hp)
+    end
 end
 
 -- ARMAS
@@ -1058,13 +1119,13 @@ core.register_entity("deathbox:flames", {
                                    local knock = vector.normalize(vel)
                                    obj:add_velocity({
                                        x = knock.x * 5,
-                                       y = 0.5,
+                                       y = 0.1,
                                        z = knock.z * 5
                                    })
                                 end
                                 self.object:remove()
                                 return
-                            else obj:set_hp(math.max(0, obj:get_hp() - deathbox.config.flame_damage))
+                            else deathbox.damage_mob(obj, deathbox.config.flame_damage)
                             end
                             self.object:remove()
                             return
@@ -1176,7 +1237,7 @@ core.register_entity("deathbox:flame_ball", {
                                 end
                                 self.object:remove()
                                 return
-                            else obj:set_hp(math.max(0, obj:get_hp() - deathbox.config.flame_damage))
+                            else deathbox.damage_mob(obj, deathbox.config.flame_damage)
                             end
                             self.object:remove()
                             return
@@ -1288,7 +1349,7 @@ core.register_entity("deathbox:flame_ball2", {
                                 end
                                 self.object:remove()
                                 return
-                            else obj:set_hp(math.max(0, obj:get_hp() - deathbox.config.flame_damage))
+                            else deathbox.damage_mob(obj, deathbox.config.flame_damage)
                             end
                             self.object:remove()
                             return
@@ -1384,10 +1445,10 @@ core.register_entity("deathbox:bullet_shot", {
                                     local knock = vector.normalize(vel)
                                     obj:add_velocity({
                                         x = knock.x * 25,
-                                        y = 2,
+                                        y = 0.5,
                                         z = knock.z * 25
                                     })
-                                else obj:set_hp(math.max(0, obj:get_hp() - deathbox.config.bullet_damage))
+                                else deathbox.damage_mob(obj, deathbox.config.bullet_damage)
                                 end
                                 self.object:remove()
                                 return true
@@ -1420,35 +1481,56 @@ core.register_entity("deathbox:zombie", {
         collide_with_objects = true,
         collisionbox = {-0.25, 0.0, -0.25, 0.25, 1.7, 0.25},
         visual = "mesh",
-        mesh = "character.b3d",
+        mesh = "db_zumbi.glb",
         textures = {"db_zombie.png^[colorize:#888888:50"},
         visual_size = {x = 1, y = 1},
         stepheight = 0.6,
         makes_footstep_sound = true,
     },
     _attack_timer = 0,
+    _dying = false,
     on_activate = function(self, staticdata, dtime_s)
+        self._dying = false
         self._last_puncher = nil
         self.object:set_armor_groups({fleshy = 100})
         self.object:set_acceleration({x = 0, y = -10, z = 0})
         self.object:set_hp(deathbox.config.zombie_hp)
         self._last_hp = deathbox.config.zombie_hp
-        self.object:set_animation({x = 168, y = 187}, 30, 0, true)
+        self.object:set_animation({x = 168 / 30, y = 187 / 30}, 1, 0, true)
     end,
-    on_punch = function(self, puncher)
+    on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
+        -- Interceptamos o dano manualmente para podermos tocar a
+        -- animação de morte antes de o engine remover o mob.
+        if self._dying then
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return true
+        end
         self._last_puncher = puncher
+        local new_hp = self.object:get_hp() - damage
+        if new_hp <= 0 then deathbox.mob_start_death(self)
+        core.sound_play("db_zombie_die", {pos = self.object:get_pos(), gain = 0.01}, true) --default_dig_cracky
+        else
+            self.object:set_hp(new_hp)
+            -- Knockback e sangue ao tomar dano
+            local self_pos = self.object:get_pos()
+            deathbox.spawn_bloodpool(self_pos)
+            core.sound_play("db_zombie_hurt", {pos = self.object:get_pos(), gain = 0.01}, true) 
+            if puncher and puncher:get_pos() then deathbox.apply_knockback(self.object, puncher:get_pos(), 4) end
+        end
+        return true  -- cancela o mecanismo padrão de dano do engine
     end,
     on_step = function(self, dtime, moveresult)
+        if self._dying then
+            -- Enquanto morre, cancela qualquer velocidade horizontal
+            -- que o engine ou um punch residual tenha aplicado.
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return
+        end
         self._attack_timer = self._attack_timer + dtime
         if not deathbox.state.running then return end
         local self_pos = self.object:get_pos()
-        local hp_now = self.object:get_hp()
-        if self._last_hp and hp_now < self._last_hp then
-            deathbox.spawn_bloodpool(self_pos)
-            local hitter = self._last_puncher
-            if hitter and hitter:get_pos() then deathbox.apply_knockback(self.object, hitter:get_pos(), 4) end
-        end
-        self._last_hp = hp_now
         local nearest, nearest_dist = nil, math.huge
         for _, player in ipairs(core.get_connected_players()) do
             local hp = player:get_hp()
@@ -1479,8 +1561,10 @@ core.register_entity("deathbox:zombie", {
         end
     end,
     on_death = function(self, killer)
+        -- Fallback: só chega aqui se set_hp(0) foi chamado diretamente
+        -- (ex.: dbstop). Evita dupla contagem se já iniciamos a morte.
+        if self._dying then return end
         deathbox.state.alive_zombies = math.max(0, deathbox.state.alive_zombies - 1)
-        core.sound_play("default_dig_cracky", {pos = self.object:get_pos(), gain = 0.5}, true)
         deathbox.check_wave_complete()
     end,
 })
@@ -1502,7 +1586,9 @@ core.register_entity("deathbox:goblin", {
         glow = 1,
     },
     _attack_timer = 0,
+    _dying = false,
     on_activate = function(self, staticdata, dtime_s)
+        self._dying = false
         self._last_puncher = nil
         self.object:set_armor_groups({fleshy = 100})
         self.object:set_acceleration({x = 0, y = -10, z = 0})
@@ -1510,20 +1596,36 @@ core.register_entity("deathbox:goblin", {
         self._last_hp = deathbox.config.zombie_hp
         self.object:set_animation({x = 168, y = 187}, 30, 0, true)
     end,
-    on_punch = function(self, puncher)
+    on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
+        if self._dying then
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return true
+        end
         self._last_puncher = puncher
+        local new_hp = self.object:get_hp() - damage
+        if new_hp <= 0 then deathbox.mob_start_death(self)
+        core.sound_play("db_goblin_die", {pos = self.object:get_pos(), gain = 0.1}, true) --default_dig_cracky
+        else
+            self.object:set_hp(new_hp)
+            local self_pos = self.object:get_pos()
+            deathbox.spawn_bloodpool(self_pos)
+            core.sound_play("db_goblin_hurt", {pos = self.object:get_pos(), gain = 0.1}, true) --default_dig_cracky
+            if puncher and puncher:get_pos() then deathbox.apply_knockback(self.object, puncher:get_pos(), 4) end
+        end
+        return true
     end,
     on_step = function(self, dtime, moveresult)
+        if self._dying then
+            -- Enquanto morre, cancela qualquer velocidade horizontal
+            -- que o engine ou um punch residual tenha aplicado.
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return
+        end
         self._attack_timer = self._attack_timer + dtime
         if not deathbox.state.running then return end
         local self_pos = self.object:get_pos()
-        local hp_now = self.object:get_hp()
-        if self._last_hp and hp_now < self._last_hp then
-            deathbox.spawn_bloodpool(self_pos)
-            local hitter = self._last_puncher
-            if hitter and hitter:get_pos() then deathbox.apply_knockback(self.object, hitter:get_pos(), 4) end
-        end
-        self._last_hp = hp_now
         local nearest, nearest_dist = nil, math.huge
         for _, player in ipairs(core.get_connected_players()) do
             local hp = player:get_hp()
@@ -1554,8 +1656,8 @@ core.register_entity("deathbox:goblin", {
         end
     end,
     on_death = function(self, killer)
+        if self._dying then return end
         deathbox.state.alive_zombies = math.max(0, deathbox.state.alive_zombies - 1)
-        core.sound_play("default_dig_cracky", {pos = self.object:get_pos(), gain = 0.5}, true)
         deathbox.check_wave_complete()
     end,
 })
@@ -1629,7 +1731,9 @@ core.register_entity("deathbox:imp", {
     _attack_timer = 0,
     _box_search_timer = 0,
     _target_box_pos = nil,
+    _dying = false,
     on_activate = function(self, staticdata, dtime_s)
+        self._dying = false
         self._last_puncher = nil
         self.object:set_armor_groups({fleshy = 100})
         self.object:set_acceleration({x = 0, y = -10, z = 0})
@@ -1640,20 +1744,37 @@ core.register_entity("deathbox:imp", {
         self._box_search_timer = 0
         self._target_box_pos = nil
     end,
-    on_punch = function(self, puncher)
+    on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
+        if self._dying then
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return true
+        end
         self._last_puncher = puncher
+        local new_hp = self.object:get_hp() - damage
+        if new_hp <= 0 then
+            deathbox.mob_start_death(self)
+        else
+            self.object:set_hp(new_hp)
+            local self_pos = self.object:get_pos()
+            deathbox.spawn_bloodpool(self_pos)
+            if puncher and puncher:get_pos() then
+                deathbox.apply_knockback(self.object, puncher:get_pos(), 4)
+            end
+        end
+        return true
     end,
     on_step = function(self, dtime, moveresult)
+        if self._dying then
+            -- Enquanto morre, cancela qualquer velocidade horizontal
+            -- que o engine ou um punch residual tenha aplicado.
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return
+        end
         self._attack_timer = self._attack_timer + dtime
         if not deathbox.state.running then return end
         local self_pos = self.object:get_pos()
-        local hp_now = self.object:get_hp()
-        if self._last_hp and hp_now < self._last_hp then
-            deathbox.spawn_bloodpool(self_pos)
-            local hitter = self._last_puncher
-            if hitter and hitter:get_pos() then deathbox.apply_knockback(self.object, hitter:get_pos(), 4) end
-        end
-        self._last_hp = hp_now
         -- Refaz a busca pela caixa mais próxima periodicamente (não
         -- precisa ser todo frame). Se a caixa que ele já estava de
         -- olho foi destruída por outra coisa nesse meio tempo
@@ -1669,13 +1790,6 @@ core.register_entity("deathbox:imp", {
             local dir = vector.subtract({x = box_pos.x, y = self_pos.y, z = box_pos.z}, self_pos)
             dir.y = 0
             local len = vector.length(dir)
-            -- "deathbox:weapon_box" é um node sólido: o imp colide com
-            -- ele e nunca consegue entrar de fato no espaço do node
-            -- (a distância mínima física entre os centros já fica em
-            -- torno de 0.65, por causa do tamanho do node + da
-            -- collisionbox do imp). Por isso o limiar de destruição
-            -- precisa ser uma distância de "ataque" alcançável, e não
-            -- uma distância que exigiria sobrepor o node.
             if len > 1.0 then
                 dir = vector.normalize(dir)
                 local vel = vector.multiply(dir, deathbox.config.imp_speed)
@@ -1722,8 +1836,8 @@ core.register_entity("deathbox:imp", {
         end
     end,
     on_death = function(self, killer)
+        if self._dying then return end
         deathbox.state.alive_zombies = math.max(0, deathbox.state.alive_zombies - 1)
-        core.sound_play("default_dig_cracky", {pos = self.object:get_pos(), gain = 0.5}, true)
         deathbox.check_wave_complete()
     end,
 })
@@ -1750,7 +1864,9 @@ core.register_entity("deathbox:demon", {
     _burst_timer = 0,
     _in_burst = false,
     _burst_target = nil,
+    _dying = false,
     on_activate = function(self, staticdata, dtime_s)
+        self._dying = false
         self._last_puncher = nil
         self.object:set_armor_groups({fleshy = 100})
         self.object:set_acceleration({x = 0, y = -10, z = 0})
@@ -1764,19 +1880,36 @@ core.register_entity("deathbox:demon", {
         self._in_burst = false
         self._burst_target = nil
     end,
-    on_punch = function(self, puncher)
+    on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
+        if self._dying then
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return true
+        end
         self._last_puncher = puncher
+        local new_hp = self.object:get_hp() - damage
+        if new_hp <= 0 then
+            deathbox.mob_start_death(self)
+        else
+            self.object:set_hp(new_hp)
+            local self_pos = self.object:get_pos()
+            deathbox.spawn_bloodpool(self_pos)
+            if puncher and puncher:get_pos() then
+                deathbox.apply_knockback(self.object, puncher:get_pos(), 4)
+            end
+        end
+        return true
     end,
     on_step = function(self, dtime, moveresult)
+        if self._dying then
+            -- Enquanto morre, cancela qualquer velocidade horizontal
+            -- que o engine ou um punch residual tenha aplicado.
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return
+        end
         if not deathbox.state.running then return end
         local self_pos = self.object:get_pos()
-        local hp_now = self.object:get_hp()
-        if self._last_hp and hp_now < self._last_hp then
-            deathbox.spawn_bloodpool(self_pos)
-            local hitter = self._last_puncher
-            if hitter and hitter:get_pos() then deathbox.apply_knockback(self.object, hitter:get_pos(), 4) end
-        end
-        self._last_hp = hp_now
         local nearest, nearest_dist = nil, math.huge
         for _, player in ipairs(core.get_connected_players()) do
             local hp = player:get_hp()
@@ -1845,8 +1978,8 @@ core.register_entity("deathbox:demon", {
         end
     end,
     on_death = function(self, killer)
+        if self._dying then return end
         deathbox.state.alive_zombies = math.max(0, deathbox.state.alive_zombies - 1)
-        core.sound_play("default_dig_cracky", {pos = self.object:get_pos(), gain = 0.5}, true)
         deathbox.check_wave_complete()
     end,
 })
@@ -1873,7 +2006,9 @@ core.register_entity("deathbox:demonking", {
     _burst_timer = 0,
     _in_burst = false,
     _burst_target = nil,
+    _dying = false,
     on_activate = function(self, staticdata, dtime_s)
+        self._dying = false
         self._last_puncher = nil
         self.object:set_armor_groups({fleshy = 100})
         self.object:set_acceleration({x = 0, y = -10, z = 0})
@@ -1893,17 +2028,36 @@ core.register_entity("deathbox:demonking", {
         self._in_burst = false
         self._burst_target = nil
     end,
-    on_punch = function(self, puncher) self._last_puncher = puncher end,
+    on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
+        if self._dying then
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return true
+        end
+        self._last_puncher = puncher
+        local new_hp = self.object:get_hp() - damage
+        if new_hp <= 0 then
+            deathbox.mob_start_death(self)
+        else
+            self.object:set_hp(new_hp)
+            local self_pos = self.object:get_pos()
+            deathbox.spawn_bloodpool(self_pos)
+            if puncher and puncher:get_pos() then
+                deathbox.apply_knockback(self.object, puncher:get_pos(), 4)
+            end
+        end
+        return true
+    end,
     on_step = function(self, dtime, moveresult)
+        if self._dying then
+            -- Enquanto morre, cancela qualquer velocidade horizontal
+            -- que o engine ou um punch residual tenha aplicado.
+            local vy = self.object:get_velocity().y
+            self.object:set_velocity({x = 0, y = math.min(vy, 0), z = 0})
+            return
+        end
         if not deathbox.state.running then return end
         local self_pos = self.object:get_pos()
-        local hp_now = self.object:get_hp()
-        if self._last_hp and hp_now < self._last_hp then
-            deathbox.spawn_bloodpool(self_pos)
-            local hitter = self._last_puncher
-            if hitter and hitter:get_pos() then deathbox.apply_knockback(self.object, hitter:get_pos(), 4) end
-        end
-        self._last_hp = hp_now
         local nearest, nearest_dist = nil, math.huge
         for _, player in ipairs(core.get_connected_players()) do
             local hp = player:get_hp()
@@ -1947,10 +2101,6 @@ core.register_entity("deathbox:demonking", {
                         tdir = vector.normalize(tdir)
                         -- "frente" do leque = direção até o alvo no momento da
                         -- explosão (tdir); "direita" é tdir rotacionado 90°.
-                        -- Antes os 8 tiros usavam eixos fixos do mundo
-                        -- ({0,0,1}, {1,0,0}, ...), por isso o padrão nunca
-                        -- girava junto com o rei demônio — agora ele é
-                        -- construído a partir de tdir, então gira com o boss.
                         local forward = {x = tdir.x, y = 0, z = tdir.z}
                         local right = {x = forward.z, y = 0, z = -forward.x}
                         local back = {x = -forward.x, y = 0, z = -forward.z}
@@ -1995,8 +2145,8 @@ core.register_entity("deathbox:demonking", {
         end
     end,
     on_death = function(self, killer)
+        if self._dying then return end
         deathbox.state.alive_zombies = math.max(0, deathbox.state.alive_zombies - 1)
-        core.sound_play("default_dig_cracky", {pos = self.object:get_pos(), gain = 0.5}, true)
         deathbox.check_wave_complete()
     end,
 })
@@ -2073,14 +2223,14 @@ function deathbox.explode_barrel(pos)
             obj:punch(nil, 1, {full_punch_interval = 0.1, damage_groups = {fleshy = cfg.barrel_explosion_damage}}, nil)
             obj:add_velocity({
                 x = dir.x * force,
-                y = force * 0.5,
+                y = force * 0.2,
                 z = dir.z * force
             })
         elseif obj:is_player() then
             obj:punch(nil, 1, {full_punch_interval = 0.1, damage_groups = {fleshy = math.floor(cfg.barrel_explosion_damage / 2)}}, nil)
             obj:add_velocity({
                 x = dir.x * force,
-                y = force * 0.5,
+                y = force * 0.2,
                 z = dir.z * force
             })
         end
@@ -2842,7 +2992,7 @@ core.register_chatcommand("killwave", {
                 ent.name == "deathbox:demon" or
                 ent.name == "deathbox:demonking"
             ) then
-                obj:set_hp(0)
+                deathbox.mob_start_death(ent)
                 mortos = mortos + 1
             end
         end
