@@ -32,6 +32,14 @@ deathbox.config = {
     demonking_hp            = 1000,
     demonking_damage        = 8,
     demonking_speed         = 1.5,
+    -- Ataque secundário (meteoro): só acontece quando o demonking está
+    -- com menos da metade do HP e o jogador está longe demais para o
+    -- ataque normal (leque de flame_ball2 em curto/médio alcance).
+    demonking_meteor_range        = 12,  -- mesmo alcance do ataque normal: acima disso é "longe demais"
+    demonking_meteor_cooldown     = 5,   -- segundos entre usos do ataque de meteoro
+    demonking_meteor_rise_time    = 1.1, -- segundos que a bola gigante sobe antes de estourar no ar
+    demonking_meteor_rise_speed   = 9,   -- velocidade vertical de subida da bola gigante
+    demonking_meteor_fall_speed   = 14,  -- velocidade de queda dos meteoros (flame_ball2 comuns)
     round_wait_time         = 4,   -- segundos de espera entre ondas
     sword_damage            = 10,
     bullet_damage           = 10,
@@ -117,6 +125,7 @@ deathbox.state = {
     active_map = nil,
     arena_ready = false, -- true quando a estrutura já está garantidamente no mapa
     border_floor_cache = nil, -- cache das posições de piso encostadas em parede
+    arena_cell_cache = nil, -- cache de todas as posições de piso livre da arena (usado no ataque de meteoro)
 }
 
 local hud_ids = {} -- [player_name] = {health = id, wave = id}
@@ -136,6 +145,7 @@ function deathbox.get_weapon_max_shots(item_name)
     if item_name == "deathbox:pistol" then return deathbox.config.pistol_max_shots end
     if item_name == "deathbox:pistol2" then return deathbox.config.pistol2_max_shots end
     if item_name == "deathbox:uzi" then return deathbox.config.uzi_max_shots end
+    if item_name == "deathbox:shotgun" then return deathbox.config.shotgun_max_shots end
     if item_name == "deathbox:flamethrower" then return deathbox.config.flamethrower_max_shots end
     return nil
 end
@@ -178,10 +188,11 @@ deathbox.weapon_drop_tables = {
     from_wave_5 = {
         {item = "deathbox:pistol",       weight = 20},
         {item = "deathbox:pistol2",      weight = 20},
-        {item = "deathbox:flamethrower", weight = 20},
+        {item = "deathbox:flamethrower", weight = 15},
         {item = "deathbox:uzi",          weight = 15},
-        {item = "deathbox:barrel",       weight = 10},
-        {item = "deathbox:barrier_0",    weight = 10},
+        {item = "deathbox:shotgun",      weight = 15},
+        {item = "deathbox:barrier_0",    weight = 5},
+        {item = "deathbox:barrel",       weight = 5},
         {item = "deathbox:medkit",       weight = 5},
         -- 20% restantes: caixa abre vazia (ver deathbox.roll_weapon_drop)
     },
@@ -203,10 +214,7 @@ end
 function deathbox.roll_weapon_drop(drop_table)
     local roll = math.random() * 100
     local acc = 0
-    for _, entry in ipairs(drop_table) do
-        acc = acc + entry.weight
-        if roll < acc then return entry.item end
-    end
+    for _, entry in ipairs(drop_table) do acc = acc + entry.weight if roll < acc then return entry.item end end
     return nil
 end
 
@@ -757,7 +765,7 @@ function deathbox.fire_pistol2(itemstack, user)
     if user and user:is_player() then
         core.sound_play("default_metal2", {pos = user:get_pos(), gain = 2, max_hear_distance = 14}, true) -- db_pistol_shot"
     end
-    if shots_fired >= deathbox.config.pistol_max_shots then
+    if shots_fired >= deathbox.config.pistol2_max_shots then
         if user and user:is_player() then
             core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Pistola Estendida sem munição!"))
             core.sound_play("default_dig_metal", {pos = user:get_pos(), gain = 0.6, max_hear_distance = 14}, true)
@@ -765,8 +773,41 @@ function deathbox.fire_pistol2(itemstack, user)
         return ItemStack("")
     end
     meta:set_int("shots_fired", shots_fired)
-    local remaining = deathbox.config.pistol_max_shots - shots_fired
+    local remaining = deathbox.config.pistol2_max_shots - shots_fired
     meta:set_string("description", "Pistola Lock 34\n(" .. remaining .. " tiros restantes)\n(clique direito para disparar)")
+    return itemstack
+end
+deathbox.config.shotgun_max_shots = 10
+core.register_tool("deathbox:shotgun", {
+    description = "Espingarda 10\nTiros: 10\n(clique direito para disparar)",
+    inventory_image = "db_shotgun.png",
+    wield_image = "db_shotgun.png",
+    wield_scale = {x = 2.5, y = 2.5, z = 2.5},
+    range = 9.1,
+    on_secondary_use = function(itemstack, user, pointed_thing) return deathbox.fire_shotgun(itemstack, user) end,
+    on_place = function(itemstack, user, pointed_thing) return deathbox.fire_shotgun(itemstack, user) end,
+})
+function deathbox.fire_shotgun(itemstack, user)
+    local meta = itemstack:get_meta()
+    local shots_fired = meta:get_int("shots_fired") + 1
+    -- Dispara 3 balas do mesmo ponto: uma reta, uma 5 graus a esquerda
+    -- e uma 5 graus a direita (desvio no angulo horizontal de mira).
+    deathbox.bullet_weapon(user, deathbox.config.bullet_speed, -5)
+    deathbox.bullet_weapon(user, deathbox.config.bullet_speed, 0)
+    deathbox.bullet_weapon(user, deathbox.config.bullet_speed, 5)
+    if user and user:is_player() then
+        core.sound_play("tnt_explode", {pos = user:get_pos(), gain = 0.3, max_hear_distance = 14}, true) -- db_pistol_shot"
+    end
+    if shots_fired >= deathbox.config.shotgun_max_shots then
+        if user and user:is_player() then
+            core.chat_send_player(user:get_player_name(), core.colorize("#ffaa55", "Pistola Estendida sem munição!"))
+            core.sound_play("default_dig_metal", {pos = user:get_pos(), gain = 0.6, max_hear_distance = 14}, true)
+        end
+        return ItemStack("")
+    end
+    meta:set_int("shots_fired", shots_fired)
+    local remaining = deathbox.config.shotgun_max_shots - shots_fired
+    meta:set_string("description", "Espingarda 10\n(" .. remaining .. " tiros restantes)\n(clique direito para disparar)")
     return itemstack
 end
 deathbox.config.uzi_max_shots = 70
@@ -800,25 +841,39 @@ function deathbox.fire_uzi(itemstack, user)
     return itemstack
 end
 
-function deathbox.bullet_weapon(user, speed)
+function deathbox.bullet_weapon(user, speed, angle_offset_deg)
     if not user or not user:is_player() then return end
     local cfg = deathbox.config
     local pos = user:get_pos()
     -- Atira sempre na altura do meio do corpo dos zumbis (y+1.0)
     -- independente do eye_height da câmera
     pos.y = pos.y + 1.0
-    local yaw = user:get_look_horizontal()
+    -- yaw_base é sempre o angulo real de mira do jogador: usado para
+    -- posicionar o ponto de origem do disparo (spawn_pos), garantindo
+    -- que tiros com angle_offset_deg (ex.: leque da espingarda) saiam
+    -- todos do mesmo ponto. yaw é o angulo já com o desvio aplicado,
+    -- usado apenas na direção/velocidade da bala.
+    local yaw_base = user:get_look_horizontal()
+    local yaw = yaw_base
+    if angle_offset_deg and angle_offset_deg ~= 0 then
+        yaw = yaw + math.rad(angle_offset_deg)
+    end
     local dir = {
         x = -math.sin(yaw),
         y = 0,
         z =  math.cos(yaw),
     }
-    local right = { -- deslocamento para a direita, mao do player
-        x = math.cos(yaw),
+    local base_dir = {
+        x = -math.sin(yaw_base),
         y = 0,
-        z = math.sin(yaw),
+        z =  math.cos(yaw_base),
     }
-    local spawn_pos = vector.add(pos, vector.multiply(dir, 0.4))
+    local right = { -- deslocamento para a direita, mao do player
+        x = math.cos(yaw_base),
+        y = 0,
+        z = math.sin(yaw_base),
+    }
+    local spawn_pos = vector.add(pos, vector.multiply(base_dir, 0.4))
     spawn_pos = vector.add(spawn_pos, vector.multiply(right, cfg.weapon_side_offset))
     local obj = core.add_entity(spawn_pos, "deathbox:bullet_shot")
     if obj then
@@ -918,13 +973,9 @@ core.register_globalstep(function(dtime)
             if ctrl.RMB then
                 local new_stack = deathbox.fire_flamethrower(wielded, player, 0.2)
                 player:set_wielded_item(new_stack)
-            else
-                -- gatilho solto: para o som contínuo
-                deathbox.stop_loop_sound(pname, "flamethrower")
+            else deathbox.stop_loop_sound(pname, "flamethrower") -- gatilho solto: para o som contínuo
             end
-        else
-            -- não está com o lança-chamas na mão: garante que o som pare
-            deathbox.stop_loop_sound(pname, "flamethrower")
+        else deathbox.stop_loop_sound(pname, "flamethrower") -- não está com o lança-chamas na mão: garante que o som pare
         end
     end
 end)
@@ -945,13 +996,9 @@ core.register_globalstep(function(dtime)
             if ctrl.RMB then
                 local new_stack = deathbox.fire_uzi(wielded, player)
                 player:set_wielded_item(new_stack)
-            else
-                -- gatilho solto: para o som contínuo
-                deathbox.stop_loop_sound(pname, "uzi")
+            else deathbox.stop_loop_sound(pname, "uzi") -- gatilho solto: para o som contínuo
             end
-        else
-            -- não está com a UZI na mão: garante que o som pare
-            deathbox.stop_loop_sound(pname, "uzi")
+        else deathbox.stop_loop_sound(pname, "uzi") -- não está com a UZI na mão: garante que o som pare
         end
     end
 end)
@@ -1102,7 +1149,7 @@ core.register_entity("deathbox:flames", {
         for _, obj in ipairs(core.get_objects_inside_radius(pos, 1.5)) do
             if obj ~= self.object and not obj:is_player() then
                 local ent = obj:get_luaentity()
-                if ent and (ent.name == "deathbox:zombie" or ent.name == "deathbox:goblin" or ent.name == "deathbox:imp") then
+                if ent and (ent.name == "deathbox:zombie" or ent.name == "deathbox:goblin") then -- or ent.name == "deathbox:imp"
                     local mob_pos = obj:get_pos()
                     local mob_pos = obj:get_pos()
                     if mob_pos then
@@ -1363,6 +1410,173 @@ core.register_entity("deathbox:flame_ball2", {
         if check_hit(check) then return end
     end
 end,
+})
+
+-- ENTIDADE: projétil de fogo GIGANTE (3x o tamanho da flame_ball2),
+-- disparado reto para cima pelo demonking em seu ataque secundário.
+-- Não colide com nada durante a subida: some sozinho após
+-- demonking_meteor_rise_time segundos, dando origem a 3 flame_ball2
+-- comuns que caem verticalmente sobre pontos aleatórios da arena.
+core.register_entity("deathbox:flame_ball2_giant", {
+    initial_properties = {
+        hp_max = 1,
+        physical = false,
+        static_save = false,
+        collide_with_objects = false,
+        visual = "sprite",
+        visual_size = {x = 0.7 * 3, y = 0.7 * 3}, -- 3x maior que a flame_ball2 comum
+        textures = {"db_flame2.png"},
+        glow = 14,
+        pointable = false,
+    },
+    _life = 0,
+    on_activate = function(self, staticdata, dtime_s)
+        self._life = deathbox.config.demonking_meteor_rise_time
+    end,
+    on_step = function(self, dtime)
+        self._life = self._life - dtime
+        if self._life <= 0 then
+            local pos = self.object:get_pos()
+            if pos then deathbox.spawn_demonking_meteor_rain(pos) end
+            self.object:remove()
+        end
+    end,
+})
+
+-- ENTIDADE: meteoro (flame_ball2 comum) que cai verticalmente sobre
+-- um ponto aleatório da arena, originado da flame_ball2_giant. Mantém
+-- os efeitos comuns de destruição de barril/caixa de arma e dano a
+-- jogadores/mobs, mas trata piso e lava de forma especial:
+--   - ao colidir com o piso de cima (o caminhável), remove esse node,
+--     abrindo uma cratera que revela a lava por baixo;
+--   - ao colidir com a lava, apenas remove o projétil (a lava em si
+--     nunca é alterada);
+--   - o piso de baixo (subestrutura, abaixo da lava) NUNCA é
+--     removido/danificado por este projétil.
+core.register_entity("deathbox:flame_ball2_meteor", {
+    initial_properties = {
+        hp_max = 1,
+        physical = true,
+        static_save = false,
+        collide_with_objects = false,
+        collisionbox = {0.01, -0.15, -0.01, 0.01, 0.15, 0.01},
+        visual = "sprite",
+        visual_size = {x = 0.7, y = 0.7},
+        textures = {"db_flame2.png"},
+        glow = 14,
+        pointable = false,
+    },
+    _owner = nil,
+    _life = 6, -- tempo maior que a flame_ball2 comum, para cair de bem mais alto
+    on_step = function(self, dtime, moveresult)
+        self._life = self._life - dtime
+        if self._life <= 0 then self.object:remove() return end
+        local pos = self.object:get_pos()
+        if not pos then return end
+        local vel = self.object:get_velocity()
+        local function check_hit(p)
+            local cp = vector.round(p)
+            local cn = core.get_node(cp)
+            if not cn then return false end
+            if cn.name:find("deathbox:barrier") then
+                deathbox.hit_barrier(cp)
+                self.object:remove()
+                return true
+            elseif cn.name == "deathbox:barrel" then
+                deathbox.explode_barrel(cp)
+                self.object:remove()
+                return true
+            elseif cn.name == "deathbox:weapon_box" then
+                core.set_node(cp, {name = "air"})
+                deathbox.schedule_weapon_box_respawn(cp)
+                self.object:remove()
+                return true
+            elseif cn.name == "default:lava_source" or cn.name == "default:lava_flowing" then
+                -- caiu na lava (ex.: em uma cratera já aberta por outro
+                -- meteoro): apenas some, nunca mexe na lava nem no que
+                -- está abaixo dela.
+                self.object:remove()
+                return true
+            elseif cn.name == "deathbox:floor" then
+                -- Só o piso de CIMA (o caminhável) pode ser removido.
+                -- O piso de baixo (subestrutura, logo abaixo da lava)
+                -- fica sempre no mesmo Y do piso de base e nunca deve
+                -- ser tocado por este projétil.
+                local floor2_y = deathbox.get_wall_base_y() + 2
+                if cp.y >= floor2_y then
+                    core.set_node(cp, {name = "air"})
+                    core.add_particlespawner({
+                        amount = 20, time = 0.05,
+                        minpos = vector.subtract(cp, {x=0.4,y=0.1,z=0.4}),
+                        maxpos = vector.add(cp, {x=0.4,y=0.4,z=0.4}),
+                        minvel = {x=-1,y=1,z=-1}, maxvel = {x=1,y=3,z=1},
+                        minexptime = 0.3, maxexptime = 0.7,
+                        minsize = 1, maxsize = 4,
+                        texture = "db_flame.png",
+                    })
+                end
+                self.object:remove()
+                return true
+            elseif cn.name ~= "air" and cn.name ~= "ignore" and cn.name ~= "deathbox:bloodpool" then
+                self.object:remove()
+                return true
+            end
+            return false
+        end
+        if moveresult and moveresult.collides then
+            local offsets = {
+                {x=0,y=0,z=0},{x=0,y=-1,z=0},{x=0,y=1,z=0},
+                {x=1,y=0,z=0},{x=-1,y=0,z=0},
+                {x=0,y=0,z=1},{x=0,y=0,z=-1},
+                {x=1,y=-1,z=0},{x=-1,y=-1,z=0},
+                {x=0,y=-1,z=1},{x=0,y=-1,z=-1},
+            }
+            for _, off in ipairs(offsets) do if check_hit(vector.add(pos, off)) then return end end
+            self.object:remove()
+            return
+        end
+        for _, obj in ipairs(core.get_objects_inside_radius(pos, 1.5)) do
+            if obj ~= self.object and obj:is_player() then
+                local player_pos = obj:get_pos()
+                if player_pos then
+                    local dx = pos.x - player_pos.x
+                    local dz = pos.z - player_pos.z
+                    local horiz_dist = math.sqrt(dx*dx + dz*dz)
+                    local dy = pos.y - (player_pos.y + 0.85)
+                    if horiz_dist < 0.35 and math.abs(dy) < 0.85 then
+                        obj:punch(self.object, 1.0, {full_punch_interval = 0.1, damage_groups = {fleshy = deathbox.config.flame_damage}}, vel)
+                        self.object:remove()
+                        return
+                    end
+                end
+            elseif obj ~= self.object and not obj:is_player() then
+                local ent = obj:get_luaentity()
+                if ent and (ent.name == "deathbox:zombie" or ent.name == "deathbox:goblin" or ent.name == "deathbox:imp" or ent.name == "deathbox:demon" or ent.name == "deathbox:demonking") then
+                    local mob_pos = obj:get_pos()
+                    if mob_pos then
+                        local dx = pos.x - mob_pos.x
+                        local dz = pos.z - mob_pos.z
+                        local horiz_dist = math.sqrt(dx*dx + dz*dz)
+                        local dy = pos.y - (mob_pos.y + 0.85)
+                        if horiz_dist < 0.35 and math.abs(dy) < 0.85 then
+                            local owner_obj = self._owner and core.get_player_by_name(self._owner)
+                            if owner_obj then
+                                obj:punch(owner_obj, 1.0, {full_punch_interval = 0.1, damage_groups = {fleshy = deathbox.config.flame_damage}}, vel)
+                            else
+                                deathbox.damage_mob(obj, deathbox.config.flame_damage)
+                            end
+                            self.object:remove()
+                            return
+                        end
+                    end
+                end
+            end
+        end
+        local rounded = vector.round(pos)
+        for _, check in ipairs({rounded, {x=rounded.x, y=rounded.y-1, z=rounded.z}}) do
+            if check_hit(check) then return end
+        end
+    end,
 })
 
 
@@ -1752,15 +1966,14 @@ core.register_entity("deathbox:imp", {
         end
         self._last_puncher = puncher
         local new_hp = self.object:get_hp() - damage
-        if new_hp <= 0 then
-            deathbox.mob_start_death(self)
+        if new_hp <= 0 then deathbox.mob_start_death(self)
+        core.sound_play("db_imp_die", {pos = self.object:get_pos(), gain = 0.05}, true) --default_dig_cracky
         else
             self.object:set_hp(new_hp)
             local self_pos = self.object:get_pos()
             deathbox.spawn_bloodpool(self_pos)
-            if puncher and puncher:get_pos() then
-                deathbox.apply_knockback(self.object, puncher:get_pos(), 4)
-            end
+            core.sound_play("db_imp_hurt", {pos = self.object:get_pos(), gain = 0.05}, true) 
+            if puncher and puncher:get_pos() then deathbox.apply_knockback(self.object, puncher:get_pos(), 4) end
         end
         return true
     end,
@@ -1888,12 +2101,13 @@ core.register_entity("deathbox:demon", {
         end
         self._last_puncher = puncher
         local new_hp = self.object:get_hp() - damage
-        if new_hp <= 0 then
-            deathbox.mob_start_death(self)
+        if new_hp <= 0 then deathbox.mob_start_death(self)
+        core.sound_play("db_demon_die", {pos = self.object:get_pos(), gain = 0.05}, true) --default_dig_cracky
         else
             self.object:set_hp(new_hp)
             local self_pos = self.object:get_pos()
             deathbox.spawn_bloodpool(self_pos)
+            core.sound_play("db_demon_hurt", {pos = self.object:get_pos(), gain = 0.05}, true) --default_dig_cracky
             if puncher and puncher:get_pos() then
                 deathbox.apply_knockback(self.object, puncher:get_pos(), 4)
             end
@@ -2006,6 +2220,7 @@ core.register_entity("deathbox:demonking", {
     _burst_timer = 0,
     _in_burst = false,
     _burst_target = nil,
+    _meteor_timer = 0,
     _dying = false,
     on_activate = function(self, staticdata, dtime_s)
         self._dying = false
@@ -2027,6 +2242,7 @@ core.register_entity("deathbox:demonking", {
         self._burst_timer = 0
         self._in_burst = false
         self._burst_target = nil
+        self._meteor_timer = deathbox.config.demonking_meteor_cooldown
     end,
     on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
         if self._dying then
@@ -2036,15 +2252,14 @@ core.register_entity("deathbox:demonking", {
         end
         self._last_puncher = puncher
         local new_hp = self.object:get_hp() - damage
-        if new_hp <= 0 then
-            deathbox.mob_start_death(self)
+        if new_hp <= 0 then deathbox.mob_start_death(self)
+        core.sound_play("db_devil_die", {pos = self.object:get_pos(), gain = 0.05}, true) --default_dig_cracky
         else
             self.object:set_hp(new_hp)
             local self_pos = self.object:get_pos()
             deathbox.spawn_bloodpool(self_pos)
-            if puncher and puncher:get_pos() then
-                deathbox.apply_knockback(self.object, puncher:get_pos(), 4)
-            end
+            core.sound_play("db_devil_hurt", {pos = self.object:get_pos(), gain = 0.05}, true) --default_dig_cracky
+            if puncher and puncher:get_pos() then deathbox.apply_knockback(self.object, puncher:get_pos(), 4) end
         end
         return true
     end,
@@ -2141,6 +2356,27 @@ core.register_entity("deathbox:demonking", {
                 self._burst_count  = 0
                 self._burst_timer  = 0
                 self._burst_target = nearest
+            else
+                -- Ataque secundário (chuva de meteoros): só entra em
+                -- cooldown/ativa quando o demonking está com menos da
+                -- metade do HP e o jogador está longe demais para o
+                -- ataque normal (fora do alcance demonking_meteor_range).
+                self._meteor_timer = self._meteor_timer - dtime
+                local hp = self.object:get_hp()
+                if self._meteor_timer <= 0
+                and hp <= deathbox.config.demonking_hp / 2
+                and len > deathbox.config.demonking_meteor_range then
+                    self._meteor_timer = deathbox.config.demonking_meteor_cooldown
+                    local launch_pos = self.object:get_pos()
+                    launch_pos.y = launch_pos.y + 2.0
+                    local proj = core.add_entity(launch_pos, "deathbox:flame_ball2_giant")
+                    if proj then
+                        proj:set_velocity({x = 0, y = deathbox.config.demonking_meteor_rise_speed, z = 0})
+                        local ent = proj:get_luaentity()
+                        if ent then ent._owner = nil end
+                    end
+                    core.sound_play("tnt_explode", {pos = launch_pos, gain = 0.4, max_hear_distance = 32}, true)
+                end
             end
         end
     end,
@@ -2427,6 +2663,7 @@ function deathbox.compute_layout(map)
     deathbox.state.active_map = map
     deathbox.barrier_columns  = {}
     deathbox.state.border_floor_cache = nil -- mapa mudou, recalcula as bordas
+    deathbox.state.arena_cell_cache = nil -- idem, para o cache de células do ataque de meteoro
     local first_floor_pos = nil
     for row_i = 1, height_map do
         local row = map[row_i]
@@ -2679,6 +2916,58 @@ function deathbox.get_random_floor_pos()
     return deathbox.state.spawn_pos
 end
 
+-- Todas as células de piso livre ("." no mapa) da arena, incluindo as
+-- centrais (diferente de get_border_floor_positions, que só pega as
+-- encostadas em parede). Usado para o ataque de meteoro do demonking,
+-- que precisa cair em "lugares aleatórios da arena" e não só nas bordas.
+function deathbox.get_arena_cell_positions()
+    if deathbox.state.arena_cell_cache then return deathbox.state.arena_cell_cache end
+    local origin = deathbox.state.map_origin
+    local map    = deathbox.state.active_map or deathbox.default_map
+    local positions = {}
+    for row_i = 1, #map do
+        local row = map[row_i]
+        for col_i = 1, #row do
+            if row:sub(col_i, col_i) == "." then
+                table.insert(positions, {
+                    x = origin.x + (col_i - 1),
+                    z = origin.z + (row_i - 1),
+                })
+            end
+        end
+    end
+    deathbox.state.arena_cell_cache = positions
+    return positions
+end
+
+function deathbox.get_random_arena_cell_pos()
+    local positions = deathbox.get_arena_cell_positions()
+    if #positions == 0 then return nil end
+    return positions[math.random(1, #positions)]
+end
+
+-- Dispara os 3 meteoros (flame_ball2 comuns) que caem verticalmente
+-- sobre pontos aleatórios da arena, chamado quando a flame_ball2_giant
+-- do demonking "estoura" no ar. spawn_source_pos é só informativo (não
+-- é usado como origem, já que cada meteoro nasce lá em cima, acima da
+-- própria arena, e cai reto para baixo).
+function deathbox.spawn_demonking_meteor_rain(spawn_source_pos)
+    local cfg = deathbox.config
+    local top_y = deathbox.get_clear_top_y()
+    for _ = 1, 3 do
+        local cell = deathbox.get_random_arena_cell_pos()
+        if cell then
+            local spawn_pos = {x = cell.x, y = top_y, z = cell.z}
+            local proj = core.add_entity(spawn_pos, "deathbox:flame_ball2_meteor")
+            if proj then
+                proj:set_velocity({x = 0, y = -cfg.demonking_meteor_fall_speed, z = 0})
+                local ent = proj:get_luaentity()
+                if ent then ent._owner = nil end
+            end
+        end
+    end
+end
+
 -- SISTEMA DE ONDAS
 function deathbox.spawn_wave()
     local cfg = deathbox.config
@@ -2899,7 +3188,8 @@ local function remove_all_deathbox_entities()
         local ent = obj:get_luaentity()
         if ent and (
             ent.name == "deathbox:zombie" or ent.name == "deathbox:goblin" or ent.name == "deathbox:imp" or ent.name == "deathbox:demon" or ent.name == "deathbox:demonking"
-            or ent.name == "deathbox:bullet_shot" or ent.name == "deathbox:flame_ball")
+            or ent.name == "deathbox:bullet_shot" or ent.name == "deathbox:flame_ball" or ent.name == "deathbox:flame_ball2"
+            or ent.name == "deathbox:flame_ball2_giant" or ent.name == "deathbox:flame_ball2_meteor")
             then obj:remove()
         end
     end
@@ -3009,7 +3299,8 @@ core.register_chatcommand("dbstop", {
             for _, obj in ipairs(core.get_objects_inside_radius(deathbox.state.spawn_pos, 64)) do
                 local ent = obj:get_luaentity()
                 if ent and (ent.name == "deathbox:zombie" or ent.name == "deathbox:goblin" or ent.name == "deathbox:imp" or ent.name == "deathbox:demon" or ent.name == "deathbox:demonking"
-                or ent.name == "deathbox:bullet_shot" or ent.name == "deathbox:flame_ball") then
+                or ent.name == "deathbox:bullet_shot" or ent.name == "deathbox:flame_ball" or ent.name == "deathbox:flame_ball2"
+                or ent.name == "deathbox:flame_ball2_giant" or ent.name == "deathbox:flame_ball2_meteor") then
                     obj:remove()
                 end
             end
